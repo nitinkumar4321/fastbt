@@ -75,28 +75,34 @@ class Zerodha(Broker):
         return True if there are no pending orders 
         else return False
         """   
-        orders = pd.DataFrame(self.orders())
-        pending = orders.pending_quantity.abs().sum()
-        canceled = orders.cancelled_quantity.abs().sum()
-        net_pending = pending - canceled
-        if net_pending == 0:
+        pending = [o for o in self.orders() if o.get('status', 'PENDING')=='PENDING']
+        if len(pending) == 0:
             return True
         else:
             return False
 
-    def cancel_all_orders(self):
+    def cancel_all_orders(self, retries=5):
         """
         Cancel all existing orders
         """
         for o in self.orders():
-            self.kite.cancel_order(variety='regular', order_id=o['order_id'])
+            try:
+                if o['status'] == 'PENDING':
+                    self.order_cancel(variety=o['variety'], order_id=o['order_id'],
+                            parent_order_id=o['parent_order_id'])
+            except Exception as e:
+                print(e)
         i = 0
         while not(self.isNilOrders):
             print('Into the loop')
             i+=1
             for o in self.orders():
-                self.kite.cancel_order(variety='regular', order_id=o['order_id'])
-            if i > 5:
+                try:
+                    if o['status'] == 'PENDING':
+                        self.order_cancel(variety=o['variety'], order_id=o['order_id'], parent_order_id=o['parent_order_id'])
+                except Exception as e:
+                    print(e)
+            if i > retries:
                 print('Breaking out of loop without canceling all orders')
                 break
 
@@ -104,7 +110,7 @@ class Zerodha(Broker):
         """
         Provides shortcuts to kite functions by mapping functions.
         Instead of calling at.kite.quote, you would directly call
-        at.quote.
+        at.quote
         Note
         -----
         1) Kite functions are initialized only after authentication
@@ -208,6 +214,7 @@ class Zerodha(Broker):
             'OPEN': 'PENDING',
             'COMPLETE': 'COMPLETE',
             'CANCELLED': 'CANCELED',
+            'CANCELLED AMO': 'CANCELED',
             'REJECTED': 'REJECTED',
             'MODIFY_PENDING': 'PENDING',
             'OPEN_PENDING': 'PENDING',
@@ -240,6 +247,12 @@ class Zerodha(Broker):
         Place an order
         """
         return self.kite.place_order(**kwargs)
+    
+    def order_cancel(self, order_id, variety='regular', parent_order_id=None):
+        """
+        Cancel an existing order
+        """
+        return self.kite.cancel_order(variety=variety, order_id=order_id, parent_order_id=parent_order_id)
  
     def _custom_orders(self, data, **kwargs):
         """
@@ -336,7 +349,6 @@ class Zerodha(Broker):
         Close all existing positions
         """
         positions = self.positions()
-        print(kwargs)
         if kwargs:
             positions = self.dict_filter(positions, **kwargs)
         if len(positions) > 0:
@@ -344,8 +356,13 @@ class Zerodha(Broker):
                 qty = abs(position['quantity'])
                 symbol = position['symbol']
                 side = self._sides[position['side']]
+                exchange = position['exchange']
+                product = position['product']
                 if qty > 0:
-                    self.order_place(symbol=symbol, quantity=qty,
-                        order_type='MARKET', side=side,
-                        variety='regular', exchange='NSE', product='MIS')
+                    try:
+                        self.order_place(symbol=symbol, quantity=qty,
+                                order_type='MARKET', side=side,
+                                variety='regular', exchange=exchange, product=product)
+                    except Exception as e:
+                        print(e)
 
